@@ -11,3 +11,9 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+model Word{
+  id Int @id @default(autoincrement())
+  word String
+  level String
+}
