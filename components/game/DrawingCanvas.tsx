@@ -1,6 +1,6 @@
 "use client"
 
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState, useCallback } from "react";
 import { socket } from "@/lib/socket"
 
 export default function DrawingCanvas({ roomId, isDrawer }: { roomId: string; isDrawer: boolean }) {
