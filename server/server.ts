@@ -50,7 +50,8 @@ app.prepare().then(() => {
         res.send({ status: "ok" });
     })
 
-    expressApp.all("*", (req: Request, res: Response) => {
+
+    expressApp.use((req: Request, res: Response) => {
         return handle(req, res);
     })
 
