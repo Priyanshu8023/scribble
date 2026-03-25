@@ -3,6 +3,9 @@ import { createServer } from "http";
 import next from "next";
 import { Server } from "socket.io";
 import { Socket } from "socket.io-client";
+import { roomHandler } from "./socket/handlers/roomHandler";
+import { drawingHandler } from "./socket/handlers/drawing";
+
 
 interface ServertoClientEvents {
     receive_message: (message: string) => void;
@@ -24,38 +27,34 @@ app.prepare().then(() => {
     const expressApp = express();
     const httpServer = createServer(expressApp);
 
-    const io = new Server<ClienttoServerEvents,ServertoClientEvents>(httpServer,{
-        cors:{
-            origin:"*",
+    const io = new Server<ClienttoServerEvents, ServertoClientEvents>(httpServer, {
+        cors: {
+            origin: "*",
         }
     })
 
-    io.on("connection",(socket) =>{
+    io.on("connection", (socket) => {
         console.log(`User connected: ${socket.id}`);
 
-        socket.on("join_room",(roomId)=>{
-            socket.join(roomId);
-            console.log(`User ${socket.id} joined: ${roomId}`);
-        })
+        // Register custom handlers
+        roomHandler(io, socket);
+        drawingHandler(io, socket);
 
-        socket.on("send_message",({roomId,message})=>{
-            socket.to(roomId).emit("receive_message",message);
-        })
-
-        socket.on("disconnect",()=>{
+        // Disconnect logging
+        socket.on("disconnect", () => {
             console.log(`User disconnected: ${socket.id}`);
         })
     })
 
-    expressApp.get("/api/custom-health-check",(req:Request,res:Response)=>{
-        res.send({status:"ok"});
+    expressApp.get("/api/custom-health-check", (req: Request, res: Response) => {
+        res.send({ status: "ok" });
     })
 
-    expressApp.all("*",(req:Request,res:Response)=>{
-        return handle(req,res);
+    expressApp.all("*", (req: Request, res: Response) => {
+        return handle(req, res);
     })
 
-    httpServer.listen(port,()=>{
+    httpServer.listen(port, () => {
         console.log(`Ready on http://${hostname}:${port}`);
     })
 });
