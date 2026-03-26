@@ -17,3 +17,13 @@ model Word{
   word String
   level String
 }
+
+model User {
+  id Int @id @default(autoincrement())
+  username String
+  avatorUrl String?
+  xp Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
