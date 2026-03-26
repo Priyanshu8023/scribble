@@ -18,6 +18,7 @@ export type RoomState = {
     round: number;
     maxRounds: number;
     timerInterval?: NodeJS.Timeout | null;
+    timeoutId?: NodeJS.Timeout | null;
 }
 
 export class GameStore {
@@ -34,7 +35,8 @@ export class GameStore {
                 drawerIndex: null,
                 currentWord: null,
                 timer: 0,
-                timerInterval: null
+                timerInterval: null,
+                timeoutId: null
             }
         }
     }
@@ -49,6 +51,8 @@ export class GameStore {
             this.rooms[roomId].players = this.rooms[roomId].players.filter(p => p.id !== socketId);
 
             if (this.rooms[roomId].players.length === 0) {
+                if (this.rooms[roomId].timerInterval) clearInterval(this.rooms[roomId].timerInterval);
+                if (this.rooms[roomId].timeoutId) clearTimeout(this.rooms[roomId].timeoutId);
                 delete this.rooms[roomId];
             }
         }
@@ -102,28 +106,24 @@ export class GameStore {
         const room = this.rooms[roomId];
         if (!room) return;
 
-        // Reset Guessed Status
         room.players.forEach(p => {
             p.hasGuessed = false;
             p.isDrawer = false;
         });
 
-        // Set the new drawer
         const drawer = room.players[room.drawerIndex as number];
         if (drawer) drawer.isDrawer = true;
 
-        // Pick a random word (for now, auto-pick instead of making them choose)
         const WORDS = ["apple", "dog", "house", "car", "javascript", "react", "guitar", "sunflower"];
         room.currentWord = WORDS[Math.floor(Math.random() * WORDS.length)];
 
         room.status = "PLAYING";
-        room.timer = 60; // 60 seconds per round
+        room.timer = 60;
 
-        // Broadcast to everyone that the game is playing
         io.to(roomId).emit("room_updated", room);
 
-        // Start the countdown interval
         if (room.timerInterval) clearInterval(room.timerInterval);
+        if (room.timeoutId) clearTimeout(room.timeoutId);
 
         room.timerInterval = setInterval(() => {
             room.timer -= 1;
@@ -146,7 +146,7 @@ export class GameStore {
         // Let players see the result for 5 seconds before next round
         io.to(roomId).emit("system_message", { type: "ROUND_END", word: room.currentWord });
 
-        setTimeout(() => {
+        room.timeoutId = setTimeout(() => {
             // Move to next player
             room.drawerIndex = (room.drawerIndex as number) + 1;
 
