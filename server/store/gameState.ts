@@ -1,12 +1,18 @@
+import { redis } from "@/lib/redisClient";
+
 export type Player = {
     id: string;
     name: string;
     score: number;
     hasGuessed: boolean;
-    isDrawer: boolean;
-}
+};
 
-export type GameStatus = "LOBBY" | "CHOOSING_WORD" | "PLAYING" | "ROUND_END" | "GAME_OVER";
+export type GameStatus =
+    | "LOBBY"
+    | "CHOOSING_WORD"
+    | "PLAYING"
+    | "ROUND_END"
+    | "GAME_OVER";
 
 export type RoomState = {
     roomId: string;
@@ -17,203 +23,234 @@ export type RoomState = {
     timer: number;
     round: number;
     maxRounds: number;
-    timerInterval?: NodeJS.Timeout | null;
-    timeoutId?: NodeJS.Timeout | null;
-}
+};
 
 export class GameStore {
-    private rooms: Record<string, RoomState> = {};
+    private timers: Record<
+        string,
+        { interval?: NodeJS.Timeout; timeout?: NodeJS.Timeout }
+    > = {};
 
-    createRoom(roomId: string) {
-        if (!this.rooms[roomId]) {
-            this.rooms[roomId] = {
-                roomId,
-                players: [],
-                status: "LOBBY",
-                round: 1,
-                maxRounds: 3,
-                drawerId: null,
-                currentWord: null,
-                timer: 0,
-                timerInterval: null,
-                timeoutId: null
-            }
-        }
+    async getRoom(roomId: string): Promise<RoomState | null> {
+        const data = await redis.get(`room:${roomId}`);
+        return data ? JSON.parse(data) : null;
     }
 
-    addPlayer(roomId: string, player: Player) {
-        this.createRoom(roomId);
-        this.rooms[roomId].players.push(player);
+    async saveRoom(room: RoomState) {
+        await redis.set(`room:${room.roomId}`, JSON.stringify(room));
     }
 
-    removePlayer(roomId: string, socketId: string) {
-        const room = this.rooms[roomId];
-        if(!room) return ;
+    async deleteRoom(roomId: string) {
+        await redis.del(`room:${roomId}`);
+    }
+
+
+    async createRoom(roomId: string) {
+        const exists = await this.getRoom(roomId);
+        if (exists) return;
+
+        const room: RoomState = {
+            roomId,
+            players: [],
+            status: "LOBBY",
+            round: 1,
+            maxRounds: 3,
+            drawerId: null,
+            currentWord: null,
+            timer: 0,
+        };
+
+        await this.saveRoom(room);
+    }
+
+    async addPlayer(roomId: string, player: Player) {
+        await this.createRoom(roomId);
+
+        const room = await this.getRoom(roomId);
+        if (!room) return;
+
+        room.players.push(player);
+        await this.saveRoom(room);
+    }
+
+    async removePlayer(roomId: string, socketId: string) {
+        const room = await this.getRoom(roomId);
+        if (!room) return;
 
         const wasDrawer = room.drawerId === socketId;
 
-        room.players  =room.players.filter(p=> p.id !== socketId);
+        room.players = room.players.filter(p => p.id !== socketId);
 
-        if(wasDrawer){
-            room.drawerId = this.getNextDrawer(room.players,null);
+        if (wasDrawer) {
+            room.drawerId = this.getNextDrawer(room.players, null);
         }
 
-        if(room.players.length < 2){
-            if(room.timerInterval){
-                clearInterval(room.timerInterval);
-                room.timerInterval = null;
-            }
-
-            if(room.timeoutId){
-                clearTimeout(room.timeoutId);
-                room.timeoutId = null;
-            }
+        if (room.players.length < 2) {
+            this.clearTimers(roomId);
 
             room.status = "LOBBY";
-            room.drawerId=null;
+            room.drawerId = null;
             room.currentWord = null;
-
         }
 
-        if(room.players.length === 0){
-            delete this.rooms[roomId];
+        if (room.players.length === 0) {
+            this.clearTimers(roomId);
+            await this.deleteRoom(roomId);
+            return;
         }
-         
+
+        await this.saveRoom(room);
     }
 
-    removePlayerFromAllRooms(socketId: string): string | null {
-        for (const roomId of Object.keys(this.rooms)) {
-            const room = this.rooms[roomId];
-            if (room.players.find(p => p.id === socketId)) {
-                this.removePlayer(roomId, socketId);
-                return roomId; // Return the roomId they were removed from
+    async removePlayerFromAllRooms(socketId: string): Promise<string | null> {
+        const keys = await redis.keys("room:*");
+
+        for (const key of keys) {
+            const roomId = key.split(":")[1];
+            const room = await this.getRoom(roomId);
+
+            if (room?.players.find(p => p.id === socketId)) {
+                await this.removePlayer(roomId, socketId);
+                return roomId;
             }
         }
+
         return null;
     }
 
-    getRoom(roomId: string): RoomState | null {
-        return this.rooms[roomId] || null;
-    }
 
-    checkGuess(roomId: string, socketId: string, guess: string): boolean {
-        const room = this.rooms[roomId];
-        if (!room || room.status !== "PLAYING" || !room.currentWord) return false;
-
-        if (guess.toLowerCase() == room.currentWord.toLocaleLowerCase()) {
-            const player = room.players.find(p => p.id === socketId);
-            if (player && !player.hasGuessed && !player.isDrawer) {
-                player.hasGuessed = true;
-                player.score += 100;
-                return true;
-            }
-        }
-        return false;
-    }
-
-
-    startGame(roomId: string, io: any) {
-        const room = this.rooms[roomId];
+    async startGame(roomId: string, io: any) {
+        const room = await this.getRoom(roomId);
         if (!room || room.players.length < 2 || room.status !== "LOBBY") return;
 
         room.status = "CHOOSING_WORD";
         room.round = 1;
         room.drawerId = room.players[0].id;
 
-        room.players.forEach(p => p.score = 0);
+        room.players.forEach(p => (p.score = 0));
+
+        await this.saveRoom(room);
 
         this.startRound(roomId, io);
     }
 
-    startRound(roomId: string, io: any) {
-        const room = this.rooms[roomId];
-        if (!room) return;
+    async startRound(roomId: string, io: any) {
+        const room = await this.getRoom(roomId);
+        if (!room || room.players.length < 2) return;
 
-        room.players.forEach(p => {
-            p.hasGuessed = false;
-             
-        });
+        room.players.forEach(p => (p.hasGuessed = false));
 
-        if(room.players.length <2 ){
-            room.status = "LOBBY
-            return;
-        }
-
-        const WORDS = ["apple", "dog", "house", "car", "javascript", "react", "guitar", "sunflower"];
-        room.currentWord = WORDS[Math.floor(Math.random() * WORDS.length)];
+        const WORDS = ["apple", "dog", "house", "car", "javascript", "react"];
+        room.currentWord =
+            WORDS[Math.floor(Math.random() * WORDS.length)];
 
         room.status = "PLAYING";
         room.timer = 60;
 
+        await this.saveRoom(room);
+
         io.to(roomId).emit("room_updated", room);
 
-        if (room.timerInterval) clearInterval(room.timerInterval);
-        if (room.timeoutId) clearTimeout(room.timeoutId);
+        this.clearTimers(roomId);
 
-        room.timerInterval = setInterval(() => {
-            room.timer -= 1;
-            io.to(roomId).emit("timer_tick", room.timer);
+        this.timers[roomId] = {
+            interval: setInterval(async () => {
+                const updatedRoom = await this.getRoom(roomId);
 
-            if (room.timer <= 0) {
-                this.endRound(roomId, io);
-            }
-        }, 1000);
+                if (!updatedRoom) {
+                    this.clearTimers(roomId);
+                    return;
+                }
+
+                updatedRoom.timer -= 1;
+
+                await this.saveRoom(updatedRoom);
+
+                io.to(roomId).emit("timer_tick", updatedRoom.timer);
+
+                if (updatedRoom.timer <= 0) {
+                    this.clearTimers(roomId);
+                    this.endRound(roomId, io);
+                }
+            }, 1000),
+        };
     }
 
-    endRound(roomId: string, io: any) {
-        const room = this.rooms[roomId];
+    async endRound(roomId: string, io: any) {
+        const room = await this.getRoom(roomId);
         if (!room) return;
 
-        if (room.timerInterval) clearInterval(room.timerInterval);
+        this.clearTimers(roomId);
 
         room.status = "ROUND_END";
+
+        await this.saveRoom(room);
+
         io.to(roomId).emit("room_updated", room);
-         
-        io.to(roomId).emit("system_message", { type: "ROUND_END", word: room.currentWord });
+        io.to(roomId).emit("system_message", {
+            type: "ROUND_END",
+            word: room.currentWord,
+        });
 
-        room.timeoutId = setTimeout(() => {
-            const room = this.rooms[roomId];
+        // 🔥 Timeout runs in Node.js
+        this.timers[roomId] = {
+            timeout: setTimeout(async () => {
+                const room = await this.getRoom(roomId);
 
-            if(!room) return ;
-            if(room.players.length < 2){
-                room.status = "LOBBY"
-                room.drawerId = null;
-                io.to(roomId).emit("room_updated",room);
-                return ;
-            }
-            const prevDrawerId = room.drawerId;
+                if (!room) return;
 
-            // Move to next player
-            room.drawerId= this.getNextDrawer(room.players,prevDrawerId);
+                if (room.players.length < 2) {
+                    room.status = "LOBBY";
+                    room.drawerId = null;
 
-             if(room.drawerId === room.players[0].id){
-                room.round+=1;
-             }
+                    await this.saveRoom(room);
+                    io.to(roomId).emit("room_updated", room);
+                    return;
+                }
 
-            // Check if game is completely over
-            if (room.round > room.maxRounds) {
-                room.status = "GAME_OVER";
-                io.to(roomId).emit("room_updated", room);
-            } else {
-                this.startRound(roomId, io);
-            }
-        }, 5000);
+                room.drawerId = this.getNextDrawer(
+                    room.players,
+                    room.drawerId
+                );
+
+                if (room.drawerId === room.players[0].id) {
+                    room.round += 1;
+                }
+
+                if (room.round > room.maxRounds) {
+                    room.status = "GAME_OVER";
+                    await this.saveRoom(room);
+                    io.to(roomId).emit("room_updated", room);
+                } else {
+                    await this.saveRoom(room);
+                    this.startRound(roomId, io);
+                }
+            }, 5000),
+        };
     }
 
-    getNextDrawer(players:Player[],currentDrawerId: string | null){
-        if(players.length == 0) return null;
+    getNextDrawer(
+        players: Player[],
+        currentDrawerId: string | null
+    ): string | null {
+        if (players.length === 0) return null;
 
-        if(!currentDrawerId) return players[0].id;
+        if (!currentDrawerId) return players[0].id;
 
-        const currentIndex = players.findIndex(p=>p.id===currentDrawerId);
+        const index = players.findIndex(p => p.id === currentDrawerId);
+        if (index === -1) return players[0].id;
 
-        if(currentIndex === -1 )  return players[0].id;
+        return players[(index + 1) % players.length].id;
+    }
 
-        const nextIndex = (currentIndex +1)%players.length;
+    clearTimers(roomId: string) {
+        const t = this.timers[roomId];
 
-        return players[nextIndex].id;
+        if (t?.interval) clearInterval(t.interval);
+        if (t?.timeout) clearTimeout(t.timeout);
+
+        delete this.timers[roomId];
     }
 }
 
 export const gameStore = new GameStore();
-

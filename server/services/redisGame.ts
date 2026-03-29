@@ -1,4 +1,4 @@
-import { redis } from "@/server/redis/client"
+import { redis } from "@/lib/redisClient"
 
 const getRoomKey = ( roomId:string) => `room:${roomId}`
 
