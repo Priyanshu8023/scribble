@@ -20,12 +20,20 @@ export default function GameRoom({ params }: { params: Promise<{ roomId: string 
     const { roomId } = use(params);
     const [name, setName] = useState("");
     const [joined, setJoined] = useState(false);
+    const [playerId, setPlayerId] = useState("");
 
     const [roomState, setRoomState] = useState<RoomState | null>(null);
     const [timer, setTimer] = useState(0);
 
     // Initial socket listener setup
     useEffect(() => {
+        let id = localStorage.getItem("playerId");
+        if (!id) {
+            id = crypto.randomUUID();
+            localStorage.setItem("playerId", id);
+        }
+        setPlayerId(id);
+
         const handleRoomUpdate = (state: RoomState) => {
             setRoomState(state);
         };
@@ -46,8 +54,8 @@ export default function GameRoom({ params }: { params: Promise<{ roomId: string 
 
     const joinRoom = (e: React.FormEvent) => {
         e.preventDefault();
-        if (!name.trim()) return;
-        socket.emit("join_room", { roomId, name });
+        if (!name.trim() || !playerId) return;
+        socket.emit("join_room", { roomId, name, playerId });
         setJoined(true);
     }
 
@@ -78,8 +86,8 @@ export default function GameRoom({ params }: { params: Promise<{ roomId: string 
 
     if (!roomState) return <div className="flex h-screen items-center justify-center text-gray-500 font-bold">Connecting...</div>;
 
-    const myPlayer = roomState.players.find(p => p.id === socket.id);
-    const isDrawer =  roomState.drawerId === socket.id;
+    const myPlayer = roomState.players.find(p => p.id === playerId);
+    const isDrawer =  roomState.drawerId === playerId;
 
     return (
         <div className="flex flex-col h-screen bg-gray-100 font-sans">
@@ -116,9 +124,9 @@ export default function GameRoom({ params }: { params: Promise<{ roomId: string 
                         <h2 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4">Players</h2>
                         <ul className="space-y-3">
                             {roomState.players.map(p => (
-                                <li key={p.id} className={`flex items-center justify-between p-2 rounded-md ${p.id === socket.id ? "bg-blue-50 border-blue-100 border" : ""} ${p.hasGuessed ? "bg-green-50" : ""}`}>
+                                <li key={p.id} className={`flex items-center justify-between p-2 rounded-md ${p.id === playerId ? "bg-blue-50 border-blue-100 border" : ""} ${p.hasGuessed ? "bg-green-50" : ""}`}>
                                     <div className="flex flex-col">
-                                        <span className={`font-semibold ${p.id === socket.id ? 'text-blue-700' : 'text-gray-800'}`}>
+                                        <span className={`font-semibold ${p.id === playerId ? 'text-blue-700' : 'text-gray-800'}`}>
                                             {p.name} {roomState.drawerId === p.id && '✏️'} {p.hasGuessed && '✔️'}
                                         </span>
                                         <span className="text-xs text-gray-500">Points: {p.score}</span>
@@ -129,7 +137,7 @@ export default function GameRoom({ params }: { params: Promise<{ roomId: string 
                     </div>
 
                     {/* Game Controls for Host */}
-                    {roomState.status === "LOBBY" && roomState.players.length >= 2 && roomState.players[0].id === socket.id && (
+                    {roomState.status === "LOBBY" && roomState.players.length >= 2 && roomState.players[0].id === playerId && (
                         <button
                             onClick={startGame}
                             className="w-full py-4 bg-green-500 hover:bg-green-600 text-white font-black rounded-lg shadow-md transition-all active:scale-95"
