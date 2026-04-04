@@ -20,16 +20,45 @@ export type RoomState = {
     status: GameStatus;
     drawerId: string | null;
     currentWord: string | null;
-    timer: number;
+    roundEndTime: number;
     round: number;
     maxRounds: number;
 };
 
 export class GameStore {
-    private timers: Record<
-        string,
-        { interval?: NodeJS.Timeout; timeout?: NodeJS.Timeout }
-    > = {};
+    private io: any = null;
+    private workerStarted = false;
+
+    setIo(io: any) {
+        this.io = io;
+        if (!this.workerStarted) {
+            this.workerStarted = true;
+            setInterval(() => this.workerLoop(), 1000);
+        }
+    }
+
+    async workerLoop() {
+        if (!this.io) return;
+        const now = Date.now();
+
+        try {
+            // Handle active playing rounds
+            const expiredRounds = await redis.zrangebyscore("active_rounds", "-inf", now);
+            for (const roomId of expiredRounds) {
+                await redis.zrem("active_rounds", roomId);
+                await this.endRound(roomId, this.io);
+            }
+
+            // Handle transition screens (results screen)
+            const expiredTransitions = await redis.zrangebyscore("transition_rounds", "-inf", now);
+            for (const roomId of expiredTransitions) {
+                await redis.zrem("transition_rounds", roomId);
+                await this.processNextRound(roomId, this.io);
+            }
+        } catch (error) {
+            console.error("Worker loop error:", error);
+        }
+    }
 
     async getRoom(roomId: string): Promise<RoomState | null> {
         const room = await redis.hgetall(`room:${roomId}`);
@@ -56,7 +85,7 @@ export class GameStore {
             currentWord: room.currentWord || null,
             round: Number(room.round),
             maxRounds: Number(room.maxRounds),
-            timer: Number(room.timer),
+            roundEndTime: Number(room.roundEndTime || 0),
             players
         };
 
@@ -80,7 +109,7 @@ export class GameStore {
             maxRounds: "6", // FIXED: maxRound -> maxRounds
             drawerId: "",
             currentWord: "",
-            timer: "0",
+            roundEndTime: "0",
         });
     }
 
@@ -146,7 +175,8 @@ export class GameStore {
         if (remainingPlayers === 0) {
             await this.deleteRoom(roomId);
             await redis.del(`room:${roomId}:leaderboard`);
-            this.clearTimers(roomId);
+            await redis.zrem("active_rounds", roomId);
+            await redis.zrem("transition_rounds", roomId);
         }
     }
 
@@ -156,12 +186,12 @@ export class GameStore {
     }
 
     async checkGuess(roomId: string, playerId: string, guess: string, io: any): Promise<boolean> {
-        const [status, word, drawerId, timerStr] = await redis.hmget(
+        const [status, word, drawerId, roundEndTimeStr] = await redis.hmget(
             `room:${roomId}`,
             "status",
             "currentWord",
             "drawerId",
-            "timer"
+            "roundEndTime"
         );
 
         if (!status || status !== "PLAYING" || !word) return false;
@@ -175,8 +205,9 @@ export class GameStore {
 
         // ---------------- SCORING ----------------
 
-        const timer = Number(timerStr) || 0;
-        const timeRatio = timer / 60;
+        const roundEndTime = Number(roundEndTimeStr) || 0;
+        const timeLeft = Math.max(0, roundEndTime - Date.now());
+        const timeRatio = timeLeft / 60000;
         const points = Math.max(10, Math.floor(100 * timeRatio));
 
         const tx = redis.multi();
@@ -216,7 +247,7 @@ export class GameStore {
         });
 
         if (allGuessed) {
-            this.clearTimers(roomId);
+            await redis.zrem("active_rounds", roomId);
             this.endRound(roomId, io);
         }
 
@@ -238,7 +269,7 @@ export class GameStore {
             round: "1",
             drawerId: room.players[0].id,
             currentWord: "",
-            timer: "0"
+            roundEndTime: "0"
         });
 
         await pipeline.exec();
@@ -257,45 +288,24 @@ export class GameStore {
             pipeline.hset(`player:${id}`, "hasGuessed", "false");
         });
 
+        const roundEndTime = Date.now() + 60000;
+
         pipeline.hset(`room:${roomId}`, {
             status: "PLAYING",
             currentWord,
-            timer: "60"
+            roundEndTime: roundEndTime.toString()
         });
 
         await pipeline.exec();
+        
+        await redis.zadd("active_rounds", roundEndTime, roomId);
 
         const updatedRoom = await this.getRoom(roomId);
         io.to(roomId).emit("room_updated", updatedRoom);
-
-        this.clearTimers(roomId);
-
-        this.timers[roomId] = {
-            interval: setInterval(async () => {
-                const timerStr = await redis.hget(`room:${roomId}`, "timer");
-                if (timerStr === null) {
-                    this.clearTimers(roomId);
-                    return;
-                }
-
-                let timer = Number(timerStr);
-                timer -= 1;
-
-                if (timer <= 0) {
-                    this.clearTimers(roomId);
-                    this.endRound(roomId, io);
-                    return;
-                }
-
-                await redis.hset(`room:${roomId}`, "timer", timer.toString());
-                io.to(roomId).emit("timer_tick", timer);
-            }, 1000),
-        };
     }
 
     async endRound(roomId: string, io: any) {
-        this.clearTimers(roomId);
-
+        await redis.zrem("active_rounds", roomId);
         await redis.hset(`room:${roomId}`, "status", "ROUND_END");
 
         const room = await this.getRoom(roomId);
@@ -307,43 +317,43 @@ export class GameStore {
             word: room.currentWord,
         });
 
-        // 🔥 Timeout runs in Node.js
-        this.timers[roomId] = {
-            timeout: setTimeout(async () => {
-                const updatedRoom = await this.getRoom(roomId);
-                if (!updatedRoom) return;
+        const transitionTime = Date.now() + 5000; // 5 seconds for end round screen
+        await redis.zadd("transition_rounds", transitionTime, roomId);
+    }
 
-                if (updatedRoom.players.length < 2) {
-                    await redis.hset(`room:${roomId}`, {
-                        status: "LOBBY",
-                        drawerId: ""
-                    });
-                    const finalRoom = await this.getRoom(roomId);
-                    io.to(roomId).emit("room_updated", finalRoom);
-                    return;
-                }
+    async processNextRound(roomId: string, io: any) {
+        const updatedRoom = await this.getRoom(roomId);
+        if (!updatedRoom) return;
 
-                const nextDrawerId = await this.getNextDrawer(roomId, updatedRoom.drawerId);
-                let newRound = updatedRoom.round;
+        if (updatedRoom.players.length < 2) {
+            await redis.hset(`room:${roomId}`, {
+                status: "LOBBY",
+                drawerId: ""
+            });
+            const finalRoom = await this.getRoom(roomId);
+            io.to(roomId).emit("room_updated", finalRoom);
+            return;
+        }
 
-                // If we wrapped around to the first player, increment round
-                if (nextDrawerId === updatedRoom.players[0].id) {
-                    newRound += 1;
-                }
+        const nextDrawerId = await this.getNextDrawer(roomId, updatedRoom.drawerId);
+        let newRound = updatedRoom.round;
 
-                if (newRound > updatedRoom.maxRounds) {
-                    await redis.hset(`room:${roomId}`, "status", "GAME_OVER");
-                    const finalRoom = await this.getRoom(roomId);
-                    io.to(roomId).emit("room_updated", finalRoom);
-                } else {
-                    await redis.hset(`room:${roomId}`, {
-                        drawerId: nextDrawerId || "",
-                        round: newRound.toString()
-                    });
-                    this.startRound(roomId, io);
-                }
-            }, 5000),
-        };
+        // If we wrapped around to the first player, increment round
+        if (nextDrawerId === updatedRoom.players[0].id) {
+            newRound += 1;
+        }
+
+        if (newRound > updatedRoom.maxRounds) {
+            await redis.hset(`room:${roomId}`, "status", "GAME_OVER");
+            const finalRoom = await this.getRoom(roomId);
+            io.to(roomId).emit("room_updated", finalRoom);
+        } else {
+            await redis.hset(`room:${roomId}`, {
+                drawerId: nextDrawerId || "",
+                round: newRound.toString()
+            });
+            this.startRound(roomId, io);
+        }
     }
 
     async getNextDrawer(roomId: string, currentDrawerId: string | null) {
@@ -379,14 +389,7 @@ export class GameStore {
         return null;
     }
 
-    clearTimers(roomId: string) {
-        const t = this.timers[roomId];
-
-        if (t?.interval) clearInterval(t.interval);
-        if (t?.timeout) clearTimeout(t.timeout);
-
-        delete this.timers[roomId];
-    }
+    // Removed clearTimers as it is no longer needed
 }
 
 export const gameStore = new GameStore();

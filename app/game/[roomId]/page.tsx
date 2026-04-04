@@ -11,7 +11,7 @@ type RoomState = {
     status: "LOBBY" | "CHOOSING_WORD" | "PLAYING" | "ROUND_END" | "GAME_OVER";
     drawerId: string | null;
     currentWord: string | null;
-    timer: number;
+    roundEndTime: number;
     round: number;
     maxRounds: number;
 };
@@ -37,20 +37,30 @@ export default function GameRoom({ params }: { params: Promise<{ roomId: string 
         const handleRoomUpdate = (state: RoomState) => {
             setRoomState(state);
         };
-        const handleTimer = (time: number) => {
-            setTimer(time);
-        };
 
         socket.on("room_updated", handleRoomUpdate);
         socket.on("room_state_updated", handleRoomUpdate);
-        socket.on("timer_tick", handleTimer);
 
         return () => {
             socket.off("room_updated", handleRoomUpdate);
             socket.off("room_state_updated", handleRoomUpdate);
-            socket.off("timer_tick", handleTimer);
         }
     }, []);
+
+    // Client-side timer interpolation
+    useEffect(() => {
+        if (roomState?.status === "PLAYING" && roomState.roundEndTime) {
+            const updateTimer = () => {
+                const timeLeft = Math.max(0, Math.ceil((roomState.roundEndTime - Date.now()) / 1000));
+                setTimer(timeLeft);
+            };
+            updateTimer(); // Initial call
+            const interval = setInterval(updateTimer, 1000);
+            return () => clearInterval(interval);
+        } else {
+            setTimer(0);
+        }
+    }, [roomState?.status, roomState?.roundEndTime]);
 
     const joinRoom = (e: React.FormEvent) => {
         e.preventDefault();

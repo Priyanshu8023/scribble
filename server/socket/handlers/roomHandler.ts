@@ -2,6 +2,7 @@ import { Server, Socket } from "socket.io";
 import { gameStore } from "@/server/store/gameState";
 
 export const roomHandler = (io: Server, socket: Socket) => {
+    gameStore.setIo(io);
 
     socket.on("join_room", async ({ roomId, name, playerId }: { roomId: string, name: string, playerId: string }) => {
         socket.join(roomId);
