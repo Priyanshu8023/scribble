@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { socket } from "@/lib/socket"
+import { Bounce, ToastContainer, toast } from 'react-toastify';
 
 
 export default function ChatSection({ roomId }: { roomId: string }) {
@@ -24,7 +25,20 @@ export default function ChatSection({ roomId }: { roomId: string }) {
     const sendMessage = (e: React.FormEvent) => {
         e.preventDefault();
         if (!message.trim()) return;
-
+        if (message.length > 20) {
+            toast.error('Length of Word is Under 20', {
+                position: "top-center",
+                autoClose: 5000,
+                hideProgressBar: false,
+                closeOnClick: false,
+                pauseOnHover: true,
+                draggable: true,
+                progress: undefined,
+                theme: "light",
+                transition: Bounce,
+            });
+            return;
+        }
         socket.emit("chat_message", {
             roomId,
             message,

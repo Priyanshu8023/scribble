@@ -5,6 +5,9 @@ export const roomHandler = (io: Server, socket: Socket) => {
     gameStore.setIo(io);
 
     socket.on("join_room", async ({ roomId, name, playerId }: { roomId: string, name: string, playerId: string }) => {
+        if (!roomId || roomId.length > 50) return;
+        if (!name || name.length > 20) return;
+
         socket.join(roomId);
 
         await gameStore.addPlayer(roomId, {
@@ -24,6 +27,8 @@ export const roomHandler = (io: Server, socket: Socket) => {
     })
 
     socket.on("chat_message", async ({ roomId, message }: { roomId: string, message: string }) => {
+        if (!roomId || !message || message.length > 100) return;
+
         const playerId = await gameStore.getPlayerIdBySocket(socket.id);
         if (!playerId) return;
 

@@ -4,6 +4,8 @@ import { use, useEffect, useState } from "react";
 import { socket } from "@/lib/socket";
 import DrawingCanvas from "@/components/game/DrawingCanvas";
 import ChatSection from "@/components/game/ChatSection";
+import { Bounce, ToastContainer, toast } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 
 type RoomState = {
     roomId: string;
@@ -25,7 +27,6 @@ export default function GameRoom({ params }: { params: Promise<{ roomId: string 
     const [roomState, setRoomState] = useState<RoomState | null>(null);
     const [timer, setTimer] = useState(0);
 
-    // Initial socket listener setup
     useEffect(() => {
         let id = localStorage.getItem("playerId");
         if (!id) {
@@ -47,7 +48,6 @@ export default function GameRoom({ params }: { params: Promise<{ roomId: string 
         }
     }, []);
 
-    // Client-side timer interpolation
     useEffect(() => {
         if (roomState?.status === "PLAYING" && roomState.roundEndTime) {
             const updateTimer = () => {
@@ -65,6 +65,22 @@ export default function GameRoom({ params }: { params: Promise<{ roomId: string 
     const joinRoom = (e: React.FormEvent) => {
         e.preventDefault();
         if (!name.trim() || !playerId) return;
+
+        if (name.length > 15) {
+            toast.error("Name must be under 15 characters", {
+                position: "top-right",
+                autoClose: 5000,
+                hideProgressBar: false,
+                closeOnClick: false,
+                pauseOnHover: true,
+                draggable: true,
+                progress: undefined,
+                theme: "light",
+                transition: Bounce,
+            });
+            return;
+        }
+
         socket.emit("join_room", { roomId, name, playerId });
         setJoined(true);
     }
@@ -90,6 +106,19 @@ export default function GameRoom({ params }: { params: Promise<{ roomId: string 
                         Play!
                     </button>
                 </form>
+                <ToastContainer
+                    position="top-right"
+                    autoClose={5000}
+                    hideProgressBar={false}
+                    newestOnTop={false}
+                    closeOnClick={false}
+                    rtl={false}
+                    pauseOnFocusLoss
+                    draggable
+                    pauseOnHover
+                    theme="light"
+                    transition={Bounce}
+                />
             </div>
         )
     }
@@ -97,11 +126,10 @@ export default function GameRoom({ params }: { params: Promise<{ roomId: string 
     if (!roomState) return <div className="flex h-screen items-center justify-center text-gray-500 font-bold">Connecting...</div>;
 
     const myPlayer = roomState.players.find(p => p.id === playerId);
-    const isDrawer =  roomState.drawerId === playerId;
+    const isDrawer = roomState.drawerId === playerId;
 
     return (
         <div className="flex flex-col h-screen bg-gray-100 font-sans">
-            {/* Header / Top Bar */}
             <div className="h-16 bg-white border-b flex items-center justify-between px-6 shadow-sm z-10">
                 <div className="flex items-center gap-4">
                     <h1 className="font-black text-2xl tracking-tighter text-blue-600">skribble.io</h1>
