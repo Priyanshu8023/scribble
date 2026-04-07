@@ -34,12 +34,12 @@ The frontend utilizes Next.js with React hooks to manage socket connections and 
 
 - [x] **State Management:** The backend relies entirely on an in-memory `GameStore` object. This means if the server crashes or restarts, all active games are lost.
   - **Fix:** Use **Redis** to store the room states. I see there's a `redis/` directory being set up; transitioning the game state to Redis will allow you to scale the backend horizontally across multiple instances using Socket.IO Redis Adapter.
-- [ ] **Stale Rooms Cleanup:** If a game crashes or players somehow leave without triggering a `disconnect` event, rooms might remain permanently in memory.
+- [x] **Stale Rooms Cleanup:** If a game crashes or players somehow leave without triggering a `disconnect` event, rooms might remain permanently in memory.
   - **Fix:** Implement a background cron job or periodic cleanup function to delete rooms that have been inactive or empty for over an hour.
 
 ## 4. Suggested New Features
 
 1. [ ] **Custom Word Lists:** Allow the room host to paste custom words when creating a lobby.
 2. [x] **Brush Types and Tools:** Introduce changing brush sizes, eraser, and an explicit color palette.
-3. [ ] **Sound Effects:** Add audio cues for correct guesses, round starts, timer ticking down, and round ending.
+3. [x] **Sound Effects:** Add audio cues for correct guesses, round starts, timer ticking down, and round ending.
 4. [ ] **Leaderboard & Authentication:** Since Prisma is installed in the project, integrate user authentication to track total wins, high scores, and persistent player profiles.
