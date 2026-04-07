@@ -54,6 +54,12 @@ export class GameStore {
                 await redis.zrem("transition_rounds", roomId);
                 await this.processNextRound(roomId, this.io);
             }
+
+            const thirtyMinsAgo = now - 1800000;
+            const staleRooms = await redis.zrangebyscore("room_activity", "-inf", thirtyMinsAgo);
+            for (const roomId of staleRooms) {
+                await this.forceDeleteRoom(roomId);
+            }
         } catch (error) {
             console.error("Worker loop error:", error);
         }
@@ -105,12 +111,33 @@ export class GameStore {
         return results.filter(([_, res]) => res !== null).length;
     }
 
+    async updateActivity(roomId: string) {
+        await redis.zadd("room_activity", Date.now(), roomId);
+    }
+
     async saveRoomState(roomId: string, partialState: Record<string, string>) {
         await redis.hset(`room:${roomId}`, partialState);
+        await this.updateActivity(roomId);
     }
 
     async deleteRoom(roomId: string) {
         await redis.del(`room:${roomId}`);
+    }
+
+    async forceDeleteRoom(roomId: string) {
+        const playerIds = await redis.smembers(`room:${roomId}:players:set`);
+        const pipeline = redis.multi();
+        playerIds.forEach(id => {
+            pipeline.del(`player:${id}`);
+        });
+        pipeline.del(`room:${roomId}`);
+        pipeline.del(`room:${roomId}:players`);
+        pipeline.del(`room:${roomId}:players:set`);
+        pipeline.del(`room:${roomId}:leaderboard`);
+        pipeline.zrem("active_rounds", roomId);
+        pipeline.zrem("transition_rounds", roomId);
+        pipeline.zrem("room_activity", roomId);
+        await pipeline.exec();
     }
 
     async createRoom(roomId: string) {
@@ -125,6 +152,7 @@ export class GameStore {
             currentWord: "",
             roundEndTime: "0",
         });
+        await this.updateActivity(roomId);
     }
 
     async addPlayer(roomId: string, player: Player, socketId: string) {
@@ -190,6 +218,9 @@ export class GameStore {
             await redis.del(`room:${roomId}:leaderboard`);
             await redis.zrem("active_rounds", roomId);
             await redis.zrem("transition_rounds", roomId);
+            await redis.zrem("room_activity", roomId);
+        } else {
+            await this.updateActivity(roomId);
         }
     }
 
@@ -206,6 +237,8 @@ export class GameStore {
             "drawerId",
             "roundEndTime"
         );
+
+        await this.updateActivity(roomId);
 
         if (!status || status !== "PLAYING" || !word) return false;
 
@@ -289,6 +322,7 @@ export class GameStore {
 
         await pipeline.exec();
         this.startRound(roomId, io);
+        await this.updateActivity(roomId);
     }
 
     async startRound(roomId: string, io: any) {

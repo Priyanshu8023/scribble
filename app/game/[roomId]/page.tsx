@@ -59,7 +59,7 @@ export default function GameRoom({ params }: { params: Promise<{ roomId: string 
 
     useEffect(() => {
         if (roomState?.status === "PLAYING" && roomState.roundEndTime) {
-            playRoundStartSound();
+            // playRoundStartSound();
             const updateTimer = () => {
                 const timeLeft = Math.max(0, Math.ceil((roomState.roundEndTime - Date.now()) / 1000));
                 setTimer(timeLeft);
