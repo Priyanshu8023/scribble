@@ -42,14 +42,13 @@ export class GameStore {
         const now = Date.now();
 
         try {
-            // Handle active playing rounds
+
             const expiredRounds = await redis.zrangebyscore("active_rounds", "-inf", now);
             for (const roomId of expiredRounds) {
                 await redis.zrem("active_rounds", roomId);
                 await this.endRound(roomId, this.io);
             }
 
-            // Handle transition screens (results screen)
             const expiredTransitions = await redis.zrangebyscore("transition_rounds", "-inf", now);
             for (const roomId of expiredTransitions) {
                 await redis.zrem("transition_rounds", roomId);
@@ -91,6 +90,21 @@ export class GameStore {
 
     }
 
+    async getActivePlayerCount(roomId: string): Promise<number> {
+        const playerIds = await redis.lrange(`room:${roomId}:players`, 0, -1);
+        if (playerIds.length === 0) return 0;
+
+        const pipeline = redis.multi();
+        playerIds.forEach(id => {
+            pipeline.get(`player:${id}:socket`);
+        });
+
+        const results = await pipeline.exec();
+        if (!results) return 0;
+
+        return results.filter(([_, res]) => res !== null).length;
+    }
+
     async saveRoomState(roomId: string, partialState: Record<string, string>) {
         await redis.hset(`room:${roomId}`, partialState);
     }
@@ -106,7 +120,7 @@ export class GameStore {
         await redis.hset(`room:${roomId}`, {
             status: "LOBBY",
             round: "1",
-            maxRounds: "6", // FIXED: maxRound -> maxRounds
+            maxRounds: "6",
             drawerId: "",
             currentWord: "",
             roundEndTime: "0",
@@ -116,7 +130,6 @@ export class GameStore {
     async addPlayer(roomId: string, player: Player, socketId: string) {
         await this.createRoom(roomId);
 
-        // Check if player is already in the room to handle reconnections
         const isExistingMember = await redis.sismember(`room:${roomId}:players:set`, player.id);
 
         if (!isExistingMember) {
@@ -168,9 +181,9 @@ export class GameStore {
         await redis.lrem(`room:${roomId}:players`, 0, playerId);
         await redis.srem(`room:${roomId}:players:set`, playerId);
         await redis.del(`player:${playerId}`);
-        await redis.zrem(`room:${roomId}:leaderboard`, playerId); // Extra cleanup
+        await redis.zrem(`room:${roomId}:leaderboard`, playerId);
 
-        // Cleanup empty room
+
         const remainingPlayers = await redis.scard(`room:${roomId}:players:set`);
         if (remainingPlayers === 0) {
             await this.deleteRoom(roomId);
@@ -213,12 +226,12 @@ export class GameStore {
         const tx = redis.multi();
 
         tx.hset(`player:${playerId}`, "hasGuessed", "true");
-        tx.hincrby(`player:${playerId}`, "score", points); // Keep HASH in sync
+        tx.hincrby(`player:${playerId}`, "score", points);
         tx.zincrby(`room:${roomId}:leaderboard`, points, playerId);
 
         if (drawerId) {
             const drawerPoints = Math.floor(points / 2);
-            tx.hincrby(`player:${drawerId}`, "score", drawerPoints); // Keep HASH in sync
+            tx.hincrby(`player:${drawerId}`, "score", drawerPoints);
             tx.zincrby(
                 `room:${roomId}:leaderboard`,
                 drawerPoints,
@@ -234,7 +247,7 @@ export class GameStore {
 
         const pipeline = redis.multi();
         playerIds.forEach(id => {
-            pipeline.hget(`player:${id}`, "hasGuessed"); // FIXED: players: -> player:
+            pipeline.hget(`player:${id}`, "hasGuessed");
         });
 
         const results = await pipeline.exec();
@@ -242,7 +255,6 @@ export class GameStore {
 
         const allGuessed = playerIds.every((id, index) => {
             if (id === drawerId) return true;
-            // ioredis returns [error, result] for each command in multi/exec
             return results[index][1] === "true";
         });
 
@@ -257,6 +269,9 @@ export class GameStore {
     async startGame(roomId: string, io: any) {
         const room = await this.getRoom(roomId);
         if (!room || room.players.length < 2 || room.status !== "LOBBY") return;
+
+        const activeCount = await this.getActivePlayerCount(roomId);
+        if (activeCount < 2) return;
 
         const pipeline = redis.multi();
         pipeline.del(`room:${roomId}:leaderboard`);
@@ -297,7 +312,7 @@ export class GameStore {
         });
 
         await pipeline.exec();
-        
+
         await redis.zadd("active_rounds", roundEndTime, roomId);
 
         const updatedRoom = await this.getRoom(roomId);
@@ -317,7 +332,7 @@ export class GameStore {
             word: room.currentWord,
         });
 
-        const transitionTime = Date.now() + 5000; // 5 seconds for end round screen
+        const transitionTime = Date.now() + 3000;
         await redis.zadd("transition_rounds", transitionTime, roomId);
     }
 
@@ -325,11 +340,17 @@ export class GameStore {
         const updatedRoom = await this.getRoom(roomId);
         if (!updatedRoom) return;
 
-        if (updatedRoom.players.length < 2) {
+        const activeCount = await this.getActivePlayerCount(roomId);
+
+        if (updatedRoom.players.length < 2 || activeCount < 2) {
             await redis.hset(`room:${roomId}`, {
                 status: "LOBBY",
-                drawerId: ""
+                drawerId: "",
+                currentWord: "",
+                roundEndTime: "0"
             });
+            await redis.zrem("active_rounds", roomId);
+            await redis.zrem("transition_rounds", roomId);
             const finalRoom = await this.getRoom(roomId);
             io.to(roomId).emit("room_updated", finalRoom);
             return;
@@ -369,13 +390,12 @@ export class GameStore {
 
         const pipeline = redis.multi();
         players.forEach(id => {
-            pipeline.get(`player:${id}:socket`); // FIXED: players: -> player:
+            pipeline.get(`player:${id}:socket`);
         });
 
         const results = await pipeline.exec();
         if (!results) return null;
 
-        // ioredis returns array of [err, result]
         const socketIds = results.map(([_, res]) => res);
 
         for (let i = 0; i < players.length; i++) {
@@ -388,8 +408,6 @@ export class GameStore {
 
         return null;
     }
-
-    // Removed clearTimers as it is no longer needed
 }
 
 export const gameStore = new GameStore();
