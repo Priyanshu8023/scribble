@@ -7,8 +7,8 @@ export default function ChatSection({ roomId }: { roomId: string }) {
     const [chat, setChat] = useState<{ userName?: string, message?: string, type?: string, word?: string }[]>([]);
 
     useEffect(() => {
-        const handleMsg = (msg: any) => setChat((prev) => [...prev, msg]);
-        const handleSys = (sys: any) => setChat((prev) => [...prev, sys]);
+        const handleMsg = (msg: any) => setChat((prev) => [...prev, msg].slice(-100));
+        const handleSys = (sys: any) => setChat((prev) => [...prev, sys].slice(-100));
 
         socket.on("receive_message", handleMsg);
         socket.on("system_message", handleSys);
@@ -25,7 +25,7 @@ export default function ChatSection({ roomId }: { roomId: string }) {
         if (!trimmedMessage) return;
         
         if (trimmedMessage.length > 50) {
-            setChat((prev) => [...prev, { type: "WARNING", message: "Message is too long (max 50 characters)" }]);
+            setChat((prev) => [...prev, { type: "WARNING", message: "Message is too long (max 50 characters)" }].slice(-100));
             return;
         }
 

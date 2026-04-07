@@ -23,7 +23,7 @@ The frontend utilizes Next.js with React hooks to manage socket connections and 
 ### **Areas for Improvement:**
 - [x] **Canvas Scaling and Responsiveness (`DrawingCanvas.tsx`):** The canvas size is hardcoded to `800x500`. If a player views this on a mobile device, their drawing coordinates will be skewed compared to someone on a desktop.
   - **Fix:** Normalize coordinates before emitting them (e.g., send percentage-based coordinates `x / width` and `y / height`) and scale them back on the receiving end.
-- [ ] **Chat History Memory Leak (`ChatSection.tsx`):** The chat window continuously appends messages via `setChat((prev) => [...prev, msg])`. Over a long game, this will severely slow down the DOM.
+- [x] **Chat History Memory Leak (`ChatSection.tsx`):** The chat window continuously appends messages via `setChat((prev) => [...prev, msg])`. Over a long game, this will severely slow down the DOM.
   - **Fix:** Cap the maximum number of chat messages kept in state (e.g., keep only the last 100 messages). 
 - [ ] **Drawing Performance:** Emitting socket events every 16ms is good, but users with slow connections might experience choppy drawings.
   - **Fix:** Batch drawing points into an array and emit them in chunks, or use binary data/WebSockets optimizations if the load gets heavy.
