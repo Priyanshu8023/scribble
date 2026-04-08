@@ -29,6 +29,7 @@ export default function DrawingCanvas({ roomId, isDrawer }: { roomId: string; is
     const lastEmitTime = useRef<number>(0);
     const lastEmittedPoint = useRef<{ x: number, y: number } | null>(null);
     const lastLocalPoint = useRef<{ x: number, y: number } | null>(null);
+    const drawBatchRef = useRef<any[]>([]);
 
     const [drawing, setDrawing] = useState(false);
     const [color, setColor] = useState("#000000")
@@ -65,6 +66,13 @@ export default function DrawingCanvas({ roomId, isDrawer }: { roomId: string; is
         setDrawing(false);
         lastLocalPoint.current = null;
         lastEmittedPoint.current = null;
+        if (drawBatchRef.current.length > 0) {
+            socket.emit("draw_batch", {
+                roomId,
+                points: drawBatchRef.current
+            });
+            drawBatchRef.current = [];
+        }
     };
 
     const draw = (e: React.MouseEvent) => {
@@ -83,26 +91,32 @@ export default function DrawingCanvas({ roomId, isDrawer }: { roomId: string; is
         lastLocalPoint.current = { x, y };
 
         const now = Date.now();
-        if (now - lastEmitTime.current > 16) {
-            // Normalize coordinates for responsiveness before emitting
-            const normX = x / canvasRef.current.width;
-            const normY = y / canvasRef.current.height;
-            const normPrevX = lastEmittedPoint.current.x / canvasRef.current.width;
-            const normPrevY = lastEmittedPoint.current.y / canvasRef.current.height;
-            const normSize = size / canvasRef.current.width;
+        
+        // Normalize coordinates for responsiveness before emitting
+        const normX = x / canvasRef.current.width;
+        const normY = y / canvasRef.current.height;
+        const normPrevX = lastEmittedPoint.current.x / canvasRef.current.width;
+        const normPrevY = lastEmittedPoint.current.y / canvasRef.current.height;
+        const normSize = size / canvasRef.current.width;
 
-            socket.emit("draw", {
+        drawBatchRef.current.push({
+            x: normX,
+            y: normY,
+            prevX: normPrevX,
+            prevY: normPrevY,
+            color,
+            size: normSize
+        });
+
+        if (now - lastEmitTime.current > 50 || drawBatchRef.current.length > 20) {
+            socket.emit("draw_batch", {
                 roomId,
-                x: normX,
-                y: normY,
-                prevX: normPrevX,
-                prevY: normPrevY,
-                color,
-                size: normSize
+                points: drawBatchRef.current
             });
+            drawBatchRef.current = [];
             lastEmitTime.current = now;
-            lastEmittedPoint.current = { x, y };
         }
+        lastEmittedPoint.current = { x, y };
     };
 
     useEffect(() => {
@@ -127,12 +141,14 @@ export default function DrawingCanvas({ roomId, isDrawer }: { roomId: string; is
             ctx.fillRect(0, 0, canvas.width, canvas.height);
         }
 
-        const handleRemoteDraw = (data: any) => {
-            if (!isDrawer && canvasRef.current) {
+        const handleRemoteDrawBatch = (data: { points: any[] }) => {
+            if (!isDrawer && canvasRef.current && Array.isArray(data.points)) {
                 const w = canvasRef.current.width;
                 const h = canvasRef.current.height;
                 // De-normalize coordinates on receiving end
-                drawLine(data.prevX * w, data.prevY * h, data.x * w, data.y * h, data.color, data.size * w);
+                data.points.forEach(p => {
+                    drawLine(p.prevX * w, p.prevY * h, p.x * w, p.y * h, p.color, p.size * w);
+                });
             }
         }
 
@@ -157,12 +173,12 @@ export default function DrawingCanvas({ roomId, isDrawer }: { roomId: string; is
             img.src = canvasData;
         }
 
-        socket.on("drawing", handleRemoteDraw);
+        socket.on("draw_batch", handleRemoteDrawBatch);
         socket.on("player_joined", handlePlayerJoined);
         socket.on("receive_canvas_sync", handleReceiveCanvas);
 
         return () => {
-            socket.off("drawing", handleRemoteDraw);
+            socket.off("draw_batch", handleRemoteDrawBatch);
             socket.off("player_joined", handlePlayerJoined);
             socket.off("receive_canvas_sync", handleReceiveCanvas);
         }

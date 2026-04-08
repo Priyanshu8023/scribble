@@ -347,7 +347,7 @@ export class GameStore {
 
                 if (words.length > 0) {
                     await redis.sadd(`room:${roomId}:words`, ...words);
-                    await redis.expire(`room:${roomId}:words`, 1800);
+                    await redis.expire(`room:${roomId}:words`, 180000);
                     const poppedWord = await redis.spop(`room:${roomId}:words`);
                     currentWord = poppedWord ? (poppedWord as string) : getRandomElement(words);
                 } else {
@@ -468,6 +468,10 @@ export class GameStore {
         }
 
         return null;
+    }
+
+    async getWord(){
+        const randomWords = await prisma.$queryRawUnsafe<
     }
 }
 
