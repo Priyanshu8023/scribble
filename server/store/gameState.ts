@@ -470,9 +470,6 @@ export class GameStore {
         return null;
     }
 
-    async getWord(){
-        const randomWords = await prisma.$queryRawUnsafe<
-    }
 }
 
 export const gameStore = new GameStore();
