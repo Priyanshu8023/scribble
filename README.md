@@ -23,6 +23,49 @@
 * **Caching & Pub/Sub:** Redis, `socket.io-redis-adapter`
 * **DevOps:** Docker, Docker Compose (Multi-stage builds)
 
+## 🖼️ Architecture Diagram
+
+```mermaid
+graph LR
+    classDef frontend fill:#3b82f6,stroke:#1d4ed8,stroke-width:2px,color:#fff,rx:8px,ry:8px;
+    classDef backend fill:#10b981,stroke:#047857,stroke-width:2px,color:#fff,rx:8px,ry:8px;
+    classDef db fill:#f59e0b,stroke:#b45309,stroke-width:2px,color:#fff,rx:8px,ry:8px;
+    classDef cache fill:#ef4444,stroke:#b91c1c,stroke-width:2px,color:#fff,rx:8px,ry:8px;
+    classDef users fill:#64748b,stroke:#334155,stroke-width:2px,color:#fff,rx:15px,ry:15px;
+
+    subgraph Clients ["🎮 Players (Browser)"]
+        direction TB
+        User1((Player 1)):::users
+        User2((Player 2)):::users
+    end
+
+    subgraph AppServer ["⚡ Application Tier"]
+        direction TB
+        NextJS["Next.js (React UI)"]:::frontend
+        Express["Express.js + Socket.io"]:::backend
+    end
+
+    subgraph DataLayer ["🗄️ Data Layer"]
+        direction TB
+        Redis[("Redis (Cache & Pub/Sub)")]:::cache
+        Postgres[("PostgreSQL via Prisma")]:::db
+    end
+
+    %% Client Interactions
+    User1 <--> |WebSockets| Express
+    User2 <--> |WebSockets| Express
+    User1 -.-> |HTTP| NextJS
+    User2 -.-> |HTTP| NextJS
+
+    %% Internal Routing
+    NextJS -.-> |Serves build| Express
+
+    %% Database and Cache Logic
+    Express <--> |Syncs Rooms & Caches| Redis
+    Express <--> |Persists Game Stats| Postgres
+    Postgres -.-> |Hydrates Dictionary| Redis
+```
+
 ## 📂 Project Structure
 ```text
 scribble/
